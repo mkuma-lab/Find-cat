@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>カメラアプリ</title>
+
+<style>
+body{
+    font-family:sans-serif;
+    text-align:center;
+    background:#f0f0f0;
+    margin:20px;
+}
+
+button{
+    font-size:20px;
+    padding:10px 20px;
+}
+
+img{
+    width:100%;
+    max-width:500px;
+    margin-top:20px;
+    border:2px solid #333;
+    border-radius:10px;
+}
+</style>
+</head>
+<body>
+
+<h1>カメラテスト</h1>
+
+<input
+    type="file"
+    accept="image/*"
+    capture="environment"
+    id="cameraInput"
+    style="display:none;"
+>
+
+<button onclick="openCamera()">
+    写真を撮る
+</button>
+
+<br>
+
+<img id="preview" style="display:none;">
+
+<script>
+const input = document.getElementById("cameraInput");
+const preview = document.getElementById("preview");
+
+function openCamera() {
+    input.click();
+}
+
+input.addEventListener("change", function(){
+
+    if(input.files.length === 0){
+        return;
+    }
+
+    const file = input.files[0];
+
+    const reader = new FileReader();
+
+    reader.onload = function(e){
+        preview.src = e.target.result;
+        preview.style.display = "block";
+    }
+
+    reader.readAsDataURL(file);
+
+});
+</script>
+
+</body>
+</html>

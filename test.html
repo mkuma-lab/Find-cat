@@ -201,4 +201,21 @@ canvas.addEventListener("touchmove", e=>{
     }
 },{passive:false});
 
-// PC
+// PC用
+canvas.addEventListener("mousemove", e=>{
+    const rect = canvas.getBoundingClientRect();
+    let x = e.clientX - rect.left;
+
+    paddle.x = x - paddle.w/2;
+
+    if(paddle.x < 0) paddle.x = 0;
+    if(paddle.x + paddle.w > canvas.width){
+        paddle.x = canvas.width - paddle.w;
+    }
+});
+
+gameLoop();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<title>猫検出アプリ</title>
+
+<style>
+body{
+    font-family:sans-serif;
+    text-align:center;
+    margin:10px;
+}
+
+button{
+    font-size:20px;
+    padding:10px 20px;
+    margin:10px;
+}
+
+#container{
+    position:relative;
+    display:inline-block;
+}
+
+img{
+    max-width:100%;
+}
+
+canvas{
+    position:absolute;
+    left:0;
+    top:0;
+}
+</style>
+</head>
+<body>
+
+<h2>猫検出アプリ</h2>
+
+<input
+id="camera"
+type="file"
+accept="image/*"
+capture="environment"
+style="display:none"
+>
+
+<button onclick="document.getElementById('camera').click()">
+写真を撮る
+</button>
+
+<div id="container">
+    <img id="photo">
+    <canvas id="canvas"></canvas>
+</div>
+
+<p id="result"></p>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
+<script>
+
+const input = document.getElementById("camera");
+const img = document.getElementById("photo");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const result = document.getElementById("result");
+
+let model;
+
+async function loadModel(){
+    result.textContent = "AI読込中...";
+    model = await cocoSsd.load();
+    result.textContent = "準備完了";
+}
+
+loadModel();
+
+input.addEventListener("change", e=>{
+
+    const file = e.target.files[0];
+
+    if(!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = ev=>{
+
+        img.src = ev.target.result;
+
+        img.onload = detectCats;
+
+    };
+
+    reader.readAsDataURL(file);
+
+});
+
+async function detectCats(){
+
+    result.textContent = "解析中...";
+
+    canvas.width = img.width;
+    canvas.height = img.height;
+
+    const predictions = await model.detect(img);
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    let catCount = 0;
+
+    predictions.forEach(pred=>{
+
+        if(pred.class === "cat"){
+
+            catCount++;
+
+            const [x,y,w,h] = pred.bbox;
+
+            ctx.strokeStyle = "red";
+            ctx.lineWidth = 4;
+            ctx.strokeRect(x,y,w,h);
+
+            ctx.fillStyle = "red";
+            ctx.font = "20px sans-serif";
+            ctx.fillText(
+                `猫 ${(pred.score*100).toFixed(1)}%`,
+                x,
+                y-5
+            );
+        }
+
+    });
+
+    if(catCount===0){
+        result.textContent =
+            "猫は見つかりませんでした";
+    }
+    else{
+        result.textContent =
+            `${catCount}匹の猫を検出しました`;
+    }
+
+}
+</script>
+
+</body>
+</html>

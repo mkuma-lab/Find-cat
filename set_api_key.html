@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemini APIキー設定</title>
+
+<style>
+body {
+    font-family: sans-serif;
+    max-width: 600px;
+    margin: 40px auto;
+    padding: 20px;
+}
+
+.card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.status {
+    background: #e8f5e9;
+    border: 1px solid #4caf50;
+    color: #2e7d32;
+}
+
+input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
+    margin-top: 10px;
+}
+
+button {
+    padding: 10px 16px;
+    margin-top: 10px;
+    margin-right: 10px;
+    cursor: pointer;
+}
+</style>
+</head>
+
+<body>
+
+<h1>Gemini API設定</h1>
+
+<div id="statusArea"></div>
+
+<div class="card">
+    <h2>APIキー設定</h2>
+
+    <input
+        type="password"
+        id="apiKey"
+        placeholder="AIza..."
+    >
+
+    <button onclick="saveApiKey()">
+        保存
+    </button>
+
+    <button onclick="clearApiKey()">
+        削除
+    </button>
+</div>
+
+<script>
+const STORAGE_KEY = "gemini_settings";
+
+function saveApiKey() {
+
+    const key = document
+        .getElementById("apiKey")
+        .value
+        .trim();
+
+    if (!key) {
+        alert("APIキーを入力してください");
+        return;
+    }
+
+    const data = {
+        apiKey: key,
+        savedAt: new Date().toISOString()
+    };
+
+    localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(data)
+    );
+
+    document.getElementById("apiKey").value = "";
+
+    updateStatus();
+
+    alert("APIキーを保存しました");
+}
+
+function clearApiKey() {
+
+    if (!confirm("保存済みのAPIキーを削除しますか？")) {
+        return;
+    }
+
+    localStorage.removeItem(STORAGE_KEY);
+
+    updateStatus();
+
+    alert("APIキーを削除しました");
+}
+
+function updateStatus() {
+
+    const area =
+        document.getElementById("statusArea");
+
+    const saved =
+        localStorage.getItem(STORAGE_KEY);
+
+    if (!saved) {
+
+        area.innerHTML = `
+            <div class="card">
+                APIキーは保存されていません。
+            </div>
+        `;
+
+        return;
+    }
+
+    const data = JSON.parse(saved);
+
+    const maskedKey =
+        data.apiKey.substring(0, 6) +
+        "********";
+
+    const saveDate =
+        new Date(data.savedAt)
+        .toLocaleString("ja-JP");
+
+    area.innerHTML = `
+        <div class="card status">
+            <strong>✅ APIキーは保存済みです</strong><br><br>
+            キー : ${maskedKey}<br>
+            保存日時 : ${saveDate}
+        </div>
+    `;
+}
+
+function getApiKey() {
+
+    const saved =
+        localStorage.getItem(STORAGE_KEY);
+
+    if (!saved) {
+        return null;
+    }
+
+    return JSON.parse(saved).apiKey;
+}
+
+updateStatus();
+</script>
+
+</body>
+</html>

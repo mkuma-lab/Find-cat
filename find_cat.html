@@ -255,15 +255,10 @@ function drawResult(cats){
         //const w = Number(cat.width);
         //const h = Number(cat.height);
 
-        const gx = cat.x;
-        const gy = cat.y;
-        const gw = cat.width;
-        const gh = cat.height;
-
-        const x = gx * canvas.width / 1000;
-        const y = gy * canvas.height / 1000;
-        const w = gw * canvas.width / 1000;
-        const h = gh * canvas.height / 1000;
+        const x = cat.x * 4;
+        const y = cat.y * 4;
+        const w = cat.width * 4;
+        const h = cat.height * 4;
 
         ctx.beginPath();
 

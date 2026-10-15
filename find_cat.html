@@ -58,6 +58,7 @@ const input = document.getElementById("imageInput");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const statusText = document.getElementById("status");
+const STORAGE_KEY = "gemini_settings";
 
 let originalImage = null;
 
@@ -81,15 +82,16 @@ input.addEventListener("change", async () => {
     img.src = URL.createObjectURL(file);
 });
 
-async function loadApiKey() {
+function getApiKey() {
 
-    const res = await fetch("./api-key.txt");
+    const saved =
+        localStorage.getItem(STORAGE_KEY);
 
-    if(!res.ok){
-        throw new Error("api-key.txt が見つかりません");
+    if (!saved) {
+        return null;
     }
 
-    return (await res.text()).trim();
+    return JSON.parse(saved).apiKey;
 }
 
 function fileToBase64(file){
@@ -116,17 +118,28 @@ async function detectCats() {
 
     const file = input.files[0];
 
-    if(!file){
+    if (!file) {
         alert("画像を選択してください");
         return;
     }
 
-    statusText.textContent = "Geminiで解析中...";
+    const apiKey = getApiKey();
 
-    try{
+    if (!apiKey) {
+        alert(
+            "Gemini APIキーが設定されていません。\n" +
+            "先に set_api_key.html で設定してください。"
+        );
+        return;
+    }
 
-        const apiKey = await loadApiKey();
-        const imageBase64 = await fileToBase64(file);
+    statusText.textContent =
+        "Geminiで解析中...";
+
+    try {
+
+        const imageBase64 =
+            await fileToBase64(file);
 
         const prompt = `
 画像内の猫を最大10匹検出してください。
@@ -164,7 +177,7 @@ x,y,width,height は画像サイズ基準ピクセル値。
 `;
 
         const response = await fetch(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" + apiKey,
             {
                 method:"POST",
                 headers:{

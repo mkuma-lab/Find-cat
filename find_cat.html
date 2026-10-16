@@ -77,9 +77,6 @@ input.addEventListener("change", async () => {
         canvas.height = img.height;
 
         ctx.drawImage(img,0,0);
-
-        statusText.innerHTML =
-           `画像サイズ: ${img.width} × ${img.height}px`;
     };
 
     img.src = URL.createObjectURL(file);
@@ -122,7 +119,7 @@ async function detectCats() {
     const file = input.files[0];
 
     if (!file) {
-        alert("猫の入った写真を撮ってください");
+        alert("画像を選択してください");
         return;
     }
 
@@ -137,8 +134,7 @@ async function detectCats() {
     }
 
     statusText.textContent =
-        `Geminiで解析中...<br>
-        画像サイズ: ${originalImage.width} × ${originalImage.height}px`;
+        "Geminiで解析中...";
 
     try {
 
@@ -155,17 +151,15 @@ async function detectCats() {
 - 光る目だけ
 - 耳だけ
 - 部分的な体
-- 暗いとこに何となくいる
-- 小さく映っている
+- 暗所
+- 遠距離
 - 横顔
 - 背面
-- 尻尾
-- 猫のフィギュア
 
 猫以外は無視してください。
 
-結果は以下の形式のJSONのみで返してください。
-余計な文字は出力しないでください。
+結果はJSONのみ。
+
 {
  "cats":[
    {
@@ -178,9 +172,7 @@ async function detectCats() {
  ]
 }
 
-x,yは、猫の部分の左上の座標。
-width,heightは、猫が表示されている部分の幅と高さ。
-x,y,width,height は入力した画像サイズを基準としたピクセル数で設定してください。
+x,y,width,height は画像サイズ基準ピクセル値。
 最大10匹。
 `;
 
@@ -221,35 +213,12 @@ x,y,width,height は入力した画像サイズを基準としたピクセル数
             ?.content?.parts?.[0]
             ?.text ?? "";
 
-        console.log("Gemini Raw Response");
-        console.log(text);
-
         const jsonText = text
             .replace(/```json/g,"")
             .replace(/```/g,"")
             .trim();
 
-        let result;
-
-        try{
-
-            result = JSON.parse(jsonText);
-
-        }catch(parseErr){
-
-            statusText.innerHTML =
-                "<b>JSON解析失敗</b><br><br>" +
-                "<b>Gemini生レスポンス:</b><br>" +
-                "<pre>" +
-                text.replace(/</g,"&lt;") +
-                "</pre>";
-
-            console.error("JSON Parse Error");
-            console.error(parseErr);
-            console.error(text);
-
-            return;
-        }
+        const result = JSON.parse(jsonText);
 
         drawResult(result.cats || []);
 
@@ -281,10 +250,15 @@ function drawResult(cats){
 
     cats.slice(0,10).forEach(cat=>{
 
-        const x = Number(cat.x);
-        const y = Number(cat.y);
-        const w = Number(cat.width);
-        const h = Number(cat.height);
+        //const x = Number(cat.x);
+        //const y = Number(cat.y);
+        //const w = Number(cat.width);
+        //const h = Number(cat.height);
+
+        const x = cat.x * 3.0;
+        const y = cat.y * 4.0;
+        const w = cat.width * 3.0;
+        const h = cat.height * 4.0;
 
         ctx.beginPath();
 

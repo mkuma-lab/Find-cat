@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Find Cat</title>
+
+<style>
+body{
+    font-family:sans-serif;
+    margin:20px;
+    text-align:center;
+}
+
+h1{
+    font-size:24px;
+}
+
+button{
+    font-size:18px;
+    padding:10px 20px;
+    margin:10px;
+}
+
+canvas{
+    max-width:100%;
+    border:1px solid #ccc;
+    margin-top:20px;
+}
+
+#status{
+    margin-top:15px;
+}
+</style>
+</head>
+<body>
+
+<h1>🐱 猫さがし</h1>
+
+<input
+    id="imageInput"
+    type="file"
+    accept="image/*"
+    capture="environment"
+/>
+
+<div>
+<button id="analyzeBtn">解析</button>
+</div>
+
+<div id="status"></div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+
+const input = document.getElementById("imageInput");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const statusText = document.getElementById("status");
+const STORAGE_KEY = "gemini_settings";
+
+let originalImage = null;
+
+input.addEventListener("change", async () => {
+
+    const file = input.files[0];
+    if (!file) return;
+
+    const img = new Image();
+
+    img.onload = () => {
+
+        originalImage = img;
+
+        canvas.width = img.width;
+        canvas.height = img.height;
+
+        ctx.drawImage(img,0,0);
+
+        statusText.innerHTML =
+           `画像サイズ: ${img.width} × ${img.height}px`;
+    };
+
+    img.src = URL.createObjectURL(file);
+});
+
+function getApiKey() {
+
+    const saved =
+        localStorage.getItem(STORAGE_KEY);
+
+    if (!saved) {
+        return null;
+    }
+
+    return JSON.parse(saved).apiKey;
+}
+
+function fileToBase64(file){
+
+    return new Promise((resolve,reject)=>{
+
+        const reader = new FileReader();
+
+        reader.onload=()=>{
+
+            const base64 = reader.result.split(",")[1];
+            resolve(base64);
+        };
+
+        reader.onerror=reject;
+
+        reader.readAsDataURL(file);
+
+    });
+
+}
+
+async function detectCats() {
+
+    const file = input.files[0];
+
+    if (!file) {
+        alert("猫の入った写真を撮ってください");
+        return;
+    }
+
+    const apiKey = getApiKey();
+
+    if (!apiKey) {
+        alert(
+            "Gemini APIキーが設定されていません。\n" +
+            "先に set_api_key.html で設定してください。"
+        );
+        return;
+    }
+
+    statusText.textContent =
+        `Geminiで解析中...<br>
+        画像サイズ: ${originalImage.width} × ${originalImage.height}px`;
+
+    try {
+
+        const imageBase64 =
+            await fileToBase64(file);
+
+        const prompt = `
+画像内の猫を最大10匹検出してください。
+
+以下も猫として扱います。
+
+- 顔のみ
+- 片目のみ
+- 光る目だけ
+- 耳だけ
+- 部分的な体
+- 暗いとこに何となくいる
+- 小さく映っている
+- 横顔
+- 背面
+- 尻尾
+- 猫のフィギュア
+
+猫以外は無視してください。
+
+結果は以下の形式のJSONのみで返してください。
+余計な文字は出力しないでください。
+{
+ "cats":[
+   {
+     "x":0,
+     "y":0,
+     "width":0,
+     "height":0,
+     "confidence":0.0
+   }
+ ]
+}
+
+x,yは、猫の部分の左上の座標。
+width,heightは、猫が表示されている部分の幅と高さ。
+x,y,width,height は入力した画像サイズを基準としたピクセル数で設定してください。
+最大10匹。
+`;
+
+        const response = await fetch(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" + apiKey,
+            {
+                method:"POST",
+                headers:{
+                    "Content-Type":"application/json"
+                },
+                body:JSON.stringify({
+                    contents:[
+                        {
+                            parts:[
+                                {
+                                    text:prompt
+                                },
+                                {
+                                    inline_data:{
+                                        mime_type:file.type,
+                                        data:imageBase64
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    generationConfig:{
+                        temperature:0
+                    }
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        const text =
+            data.candidates?.[0]
+            ?.content?.parts?.[0]
+            ?.text ?? "";
+
+        console.log("Gemini Raw Response");
+        console.log(text);
+
+        const jsonText = text
+            .replace(/```json/g,"")
+            .replace(/```/g,"")
+            .trim();
+
+        let result;
+
+        try{
+
+            result = JSON.parse(jsonText);
+
+        }catch(parseErr){
+
+            statusText.innerHTML =
+                "<b>JSON解析失敗</b><br><br>" +
+                "<b>Gemini生レスポンス:</b><br>" +
+                "<pre>" +
+                text.replace(/</g,"&lt;") +
+                "</pre>";
+
+            console.error("JSON Parse Error");
+            console.error(parseErr);
+            console.error(text);
+
+            return;
+        }
+
+        drawResult(result.cats || []);
+
+    }catch(err){
+
+        console.error(err);
+        alert(err.message);
+
+    }
+
+}
+
+function drawResult(cats){
+
+    if(!originalImage) return;
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    ctx.drawImage(
+        originalImage,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = "red";
+
+    cats.slice(0,10).forEach(cat=>{
+
+        const x = Number(cat.x);
+        const y = Number(cat.y);
+        const w = Number(cat.width);
+        const h = Number(cat.height);
+
+        ctx.beginPath();
+
+        ctx.ellipse(
+            x + w/2,
+            y + h/2,
+            w/2,
+            h/2,
+            0,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.stroke();
+
+        ctx.fillStyle="red";
+        ctx.font="24px sans-serif";
+        ctx.fillText("🐱",x,y-5);
+    });
+
+    statusText.textContent =
+        `猫を ${cats.length} 匹検出しました`;
+}
+
+document
+.getElementById("analyzeBtn")
+.addEventListener("click",detectCats);
+
+</script>
+
+</body>
+</html>

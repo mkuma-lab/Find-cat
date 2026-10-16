@@ -30,9 +30,20 @@ canvas{
 
 #status{
     margin-top:15px;
+    text-align:left;
+    display:inline-block;
+    max-width:95%;
+    word-break:break-word;
+}
+
+pre{
+    text-align:left;
+    white-space:pre-wrap;
+    word-break:break-word;
 }
 </style>
 </head>
+
 <body>
 
 <h1>🐱 猫さがし</h1>
@@ -58,6 +69,7 @@ const input = document.getElementById("imageInput");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const statusText = document.getElementById("status");
+
 const STORAGE_KEY = "gemini_settings";
 
 let originalImage = null;
@@ -77,6 +89,9 @@ input.addEventListener("change", async () => {
         canvas.height = img.height;
 
         ctx.drawImage(img,0,0);
+
+        statusText.innerHTML =
+            `画像サイズ: ${img.width} × ${img.height}px`;
     };
 
     img.src = URL.createObjectURL(file);
@@ -102,16 +117,16 @@ function fileToBase64(file){
 
         reader.onload=()=>{
 
-            const base64 = reader.result.split(",")[1];
+            const base64 =
+                reader.result.split(",")[1];
+
             resolve(base64);
         };
 
         reader.onerror=reject;
 
         reader.readAsDataURL(file);
-
     });
-
 }
 
 async function detectCats() {
@@ -126,15 +141,18 @@ async function detectCats() {
     const apiKey = getApiKey();
 
     if (!apiKey) {
+
         alert(
             "Gemini APIキーが設定されていません。\n" +
             "先に set_api_key.html で設定してください。"
         );
+
         return;
     }
 
-    statusText.textContent =
-        "Geminiで解析中...";
+    statusText.innerHTML =
+        `Geminiで解析中...<br>
+        画像サイズ: ${originalImage.width} × ${originalImage.height}px`;
 
     try {
 
@@ -173,6 +191,7 @@ async function detectCats() {
 }
 
 x,y,width,height は画像サイズ基準ピクセル値。
+
 最大10匹。
 `;
 
@@ -180,9 +199,11 @@ x,y,width,height は画像サイズ基準ピクセル値。
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" + apiKey,
             {
                 method:"POST",
+
                 headers:{
                     "Content-Type":"application/json"
                 },
+
                 body:JSON.stringify({
                     contents:[
                         {
@@ -199,6 +220,7 @@ x,y,width,height は画像サイズ基準ピクセル値。
                             ]
                         }
                     ],
+
                     generationConfig:{
                         temperature:0
                     }
@@ -213,29 +235,56 @@ x,y,width,height は画像サイズ基準ピクセル値。
             ?.content?.parts?.[0]
             ?.text ?? "";
 
+        console.log("Gemini Raw Response");
+        console.log(text);
+
         const jsonText = text
             .replace(/```json/g,"")
             .replace(/```/g,"")
             .trim();
 
-        const result = JSON.parse(jsonText);
+        let result;
+
+        try{
+
+            result = JSON.parse(jsonText);
+
+        }catch(parseErr){
+
+            statusText.innerHTML =
+                "<b>JSON解析失敗</b><br><br>" +
+                "<b>Gemini生レスポンス:</b><br>" +
+                "<pre>" +
+                text.replace(/</g,"&lt;") +
+                "</pre>";
+
+            console.error("JSON Parse Error");
+            console.error(parseErr);
+            console.error(text);
+
+            return;
+        }
 
         drawResult(result.cats || []);
 
     }catch(err){
 
         console.error(err);
+
         alert(err.message);
-
     }
-
 }
 
 function drawResult(cats){
 
     if(!originalImage) return;
 
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.clearRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
 
     ctx.drawImage(
         originalImage,
@@ -248,23 +297,21 @@ function drawResult(cats){
     ctx.lineWidth = 8;
     ctx.strokeStyle = "red";
 
-    cats.slice(0,10).forEach(cat=>{
+    let info =
+        `猫を ${cats.length} 匹検出しました<br><br>`;
 
-        //const x = Number(cat.x);
-        //const y = Number(cat.y);
-        //const w = Number(cat.width);
-        //const h = Number(cat.height);
+    cats.slice(0,10).forEach((cat,index)=>{
 
-        const x = cat.x * 3.0;
-        const y = cat.y * 4.0;
-        const w = cat.width * 3.0;
-        const h = cat.height * 4.0;
+        const x = Number(cat.x);
+        const y = Number(cat.y);
+        const w = Number(cat.width);
+        const h = Number(cat.height);
 
         ctx.beginPath();
 
         ctx.ellipse(
-            x + w/2,
-            y + h/2,
+            x - w/2,
+            y - h/2,
             w/2,
             h/2,
             0,
@@ -276,11 +323,24 @@ function drawResult(cats){
 
         ctx.fillStyle="red";
         ctx.font="24px sans-serif";
-        ctx.fillText("🐱",x,y-5);
+
+        ctx.fillText(
+            "🐱",
+            x,
+            y - 5
+        );
+
+        info +=
+            `[${index+1}] `
+            + `x=${x}, `
+            + `y=${y}, `
+            + `width=${w}, `
+            + `height=${h}, `
+            + `confidence=${cat.confidence}`
+            + "<br>";
     });
 
-    statusText.textContent =
-        `猫を ${cats.length} 匹検出しました`;
+    statusText.innerHTML = info;
 }
 
 document

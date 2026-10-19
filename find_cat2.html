@@ -65,6 +65,7 @@ let originalImage = null;
 input.addEventListener("change", async () => {
 
     const file = input.files[0];
+    originalImage = null;
     if (!file) return;
 
     const img = new Image();
@@ -117,12 +118,49 @@ function fileToBase64(file){
 
 }
 
+function resizeImageToHalf(image, mimeType) {
+
+    const resizedCanvas = document.createElement("canvas");
+    resizedCanvas.width = Math.max(1, Math.floor(image.width / 2));
+    resizedCanvas.height = Math.max(1, Math.floor(image.height / 2));
+
+    const resizedContext = resizedCanvas.getContext("2d");
+    resizedContext.drawImage(
+        image,
+        0,
+        0,
+        resizedCanvas.width,
+        resizedCanvas.height
+    );
+
+    return new Promise((resolve, reject) => {
+
+        resizedCanvas.toBlob(blob => {
+
+            if (!blob) {
+                reject(new Error("画像の縮小に失敗しました"));
+                return;
+            }
+
+            resolve(blob);
+
+        }, mimeType);
+
+    });
+
+}
+
 async function detectCats() {
 
     const file = input.files[0];
 
     if (!file) {
         alert("猫の入った写真を撮ってください");
+        return;
+    }
+
+    if (!originalImage) {
+        alert("画像を読み込んでください");
         return;
     }
 
@@ -142,8 +180,10 @@ async function detectCats() {
 
     try {
 
+        const resizedImage =
+            await resizeImageToHalf(originalImage, file.type);
         const imageBase64 =
-            await fileToBase64(file);
+            await fileToBase64(resizedImage);
 
         const prompt = `
 画像内の猫を最大10匹検出してください。
@@ -200,7 +240,7 @@ x,y,width,height は、画像を幅1000px・高さ1000pxとして扱った場合
                                 },
                                 {
                                     inline_data:{
-                                        mime_type:file.type,
+                                        mime_type:resizedImage.type,
                                         data:imageBase64
                                     }
                                 }

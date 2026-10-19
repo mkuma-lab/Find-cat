@@ -180,7 +180,7 @@ async function detectCats() {
 
 x,yは、猫の部分の左上の座標。
 width,heightは、猫が表示されている部分の幅と高さ。
-x,y,width,height は入力した画像サイズを基準としたピクセル数で設定してください。
+x,y,width,height は、画像を幅1000px・高さ1000pxとして扱った場合のピクセル数で設定してください。
 最大10匹。
 `;
 
@@ -281,10 +281,10 @@ function drawResult(cats){
 
     cats.slice(0,10).forEach(cat=>{
 
-        const x = Number(cat.x);
-        const y = Number(cat.y);
-        const w = Number(cat.width);
-        const h = Number(cat.height);
+        const x = Number(cat.x) * canvas.width / 1000;
+        const y = Number(cat.y) * canvas.height / 1000;
+        const w = Number(cat.width) * canvas.width / 1000;
+        const h = Number(cat.height) * canvas.height / 1000;
 
         ctx.beginPath();
 

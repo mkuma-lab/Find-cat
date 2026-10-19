@@ -30,6 +30,7 @@ canvas{
 
 #status{
     margin-top:15px;
+    white-space:pre-line;
 }
 </style>
 </head>
@@ -175,8 +176,7 @@ async function detectCats() {
     }
 
     statusText.textContent =
-        `Geminiで解析中...<br>
-        画像サイズ: ${originalImage.width} × ${originalImage.height}px`;
+        `Geminiで解析中...\n画像サイズ: ${originalImage.width} × ${originalImage.height}px`;
 
     try {
 

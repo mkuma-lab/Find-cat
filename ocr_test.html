@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>画像OCR・スプレッドシート保存</title>
+  <style>
+    body {
+      box-sizing: border-box;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 20px 16px 40px;
+      font-family: sans-serif;
+      line-height: 1.6;
+      color: #222;
+    }
+    h1 { font-size: 1.4rem; }
+    label { display: block; margin-top: 18px; font-weight: 600; }
+    input, button { box-sizing: border-box; font: inherit; }
+    input[type="text"], input[type="password"], input[type="file"] {
+      width: 100%;
+      margin-top: 6px;
+      padding: 10px;
+    }
+    button {
+      margin-top: 16px;
+      padding: 10px 16px;
+      border: 0;
+      border-radius: 6px;
+      background: #1769aa;
+      color: white;
+      font-weight: 600;
+    }
+    button:disabled { opacity: .55; }
+    #status { margin-top: 18px; white-space: pre-line; }
+    #metadata { margin-top: 8px; color: #555; font-size: .92rem; }
+    .note { color: #555; font-size: .9rem; }
+    .table-wrap { overflow-x: auto; margin-top: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px; border: 1px solid #ccc; text-align: left; }
+    th { background: #f3f5f7; }
+    #resultSection[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <h1>画像OCR・スプレッドシート保存</h1>
+  <p class="note">画像を選ぶとGeminiで項目名と値を読み取り、確認後に指定したスプレッドシートへ追記します。</p>
+
+  <label for="apiKey">Gemini APIキー</label>
+  <input id="apiKey" type="password" autocomplete="off" placeholder="初回のみ入力">
+  <button id="saveKeyButton" type="button">APIキーを保存</button>
+  <div id="keyStatus" class="note" aria-live="polite"></div>
+  <p class="note">APIキーはこのApps Scriptのスクリプトプロパティに保存されます。</p>
+
+  <label for="spreadsheetName">保存するスプレッドシート名</label>
+  <input id="spreadsheetName" type="text" maxlength="200" autocomplete="off">
+  <p class="note">Google Drive内で同名のファイルを探し、なければ新規作成します。</p>
+
+  <label for="imageInput">画像</label>
+  <input id="imageInput" type="file" accept="image/*">
+  <div id="metadata" aria-live="polite"></div>
+
+  <button id="recognizeButton" type="button">画像を読み取る</button>
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <section id="resultSection" hidden>
+    <h2>認識結果</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>項目名</th><th>値</th></tr></thead>
+        <tbody id="resultRows"></tbody>
+      </table>
+    </div>
+    <button id="saveButton" type="button">スプレッドシートに保存</button>
+  </section>
+
+  <script>
+    const SPREADSHEET_NAME_KEY = "ocr_spreadsheet_name";
+    const imageInput = document.getElementById("imageInput");
+    const spreadsheetNameInput = document.getElementById("spreadsheetName");
+    const statusElement = document.getElementById("status");
+    const metadataElement = document.getElementById("metadata");
+    const recognizeButton = document.getElementById("recognizeButton");
+    const saveButton = document.getElementById("saveButton");
+    const resultSection = document.getElementById("resultSection");
+    let selectedFile = null;
+    let selectedMetadata = null;
+    let recognizedItems = null;
+
+    spreadsheetNameInput.value =
+      localStorage.getItem(SPREADSHEET_NAME_KEY) || "OCR結果";
+    spreadsheetNameInput.addEventListener("input", () => {
+      localStorage.setItem(SPREADSHEET_NAME_KEY, spreadsheetNameInput.value);
+    });
+
+    google.script.run
+      .withSuccessHandler(isConfigured => {
+        document.getElementById("keyStatus").textContent = isConfigured
+          ? "Gemini APIキーは設定済みです。"
+          : "Gemini APIキーを設定してください。";
+      })
+      .withFailureHandler(showError)
+      .checkGeminiApiKey();
+
+    document.getElementById("saveKeyButton").addEventListener("click", () => {
+      const apiKey = document.getElementById("apiKey").value.trim();
+      if (!apiKey) {
+        document.getElementById("keyStatus").textContent =
+          "Gemini APIキーを入力してください。";
+        return;
+      }
+
+      document.getElementById("saveKeyButton").disabled = true;
+      google.script.run
+        .withSuccessHandler(() => {
+          document.getElementById("apiKey").value = "";
+          document.getElementById("keyStatus").textContent =
+            "Gemini APIキーを保存しました。";
+          document.getElementById("saveKeyButton").disabled = false;
+        })
+        .withFailureHandler(error => {
+          document.getElementById("saveKeyButton").disabled = false;
+          showError(error);
+        })
+        .saveGeminiApiKey(apiKey);
+    });
+
+    imageInput.addEventListener("change", async () => {
+      selectedFile = imageInput.files && imageInput.files[0] || null;
+      selectedMetadata = null;
+      recognizedItems = null;
+      resultSection.hidden = true;
+      metadataElement.textContent = "";
+      statusElement.textContent = "";
+      if (!selectedFile) return;
+
+      const file = selectedFile;
+      recognizeButton.disabled = true;
+      try {
+        const metadata = await readImageMetadata(file);
+        if (selectedFile !== file) return;
+        selectedMetadata = metadata;
+        const details = [];
+        details.push("撮影日時: " + (selectedMetadata.captureDate || "EXIF情報なし"));
+        details.push("緯度: " + displayMetadata(selectedMetadata.latitude));
+        details.push("経度: " + displayMetadata(selectedMetadata.longitude));
+        metadataElement.textContent = details.join(" / ");
+        if (!selectedMetadata.hasExif) {
+          metadataElement.textContent +=
+            "（撮影情報はJPEG・PNGのEXIFから取得します。HEIC等では取得できない場合があります）";
+        }
+      } catch (error) {
+        if (selectedFile !== file) return;
+        selectedMetadata = { captureDate: "", latitude: "", longitude: "" };
+        metadataElement.textContent =
+          "画像の撮影情報を読み取れませんでした。撮影日時・位置情報なしで続行できます。";
+      } finally {
+        if (selectedFile === file) recognizeButton.disabled = false;
+      }
+    });
+
+    recognizeButton.addEventListener("click", async () => {
+      if (!selectedFile) {
+        statusElement.textContent = "先に画像を選択してください。";
+        return;
+      }
+      if (!selectedMetadata) {
+        statusElement.textContent = "画像情報を読み込み中です。少し待ってから再度お試しください。";
+        return;
+      }
+      if (!spreadsheetNameInput.value.trim()) {
+        statusElement.textContent = "保存するスプレッドシート名を入力してください。";
+        return;
+      }
+
+      const file = selectedFile;
+      setBusy(true, "画像をGeminiで解析しています...");
+      try {
+        const imageData = await fileToBase64(file);
+        google.script.run
+          .withSuccessHandler(items => {
+            recognizedItems = items;
+            renderItems(items);
+            resultSection.hidden = false;
+            setBusy(false, items.length
+              ? items.length + "件の項目を認識しました。内容を確認して保存してください。"
+              : "読み取れる項目はありませんでした。撮影情報のみ保存できます。");
+          })
+          .withFailureHandler(error => {
+            setBusy(false, error.message || String(error));
+          })
+          .recognizeImage({
+            imageData: imageData,
+            mimeType: file.type || "image/jpeg"
+          });
+      } catch (error) {
+        setBusy(false, error.message || String(error));
+      }
+    });
+
+    saveButton.addEventListener("click", () => {
+      if (!selectedFile || !selectedMetadata || !Array.isArray(recognizedItems)) {
+        statusElement.textContent = "先に画像を読み取ってください。";
+        return;
+      }
+
+      setBusy(true, "スプレッドシートへ保存しています...");
+      google.script.run
+        .withSuccessHandler(result => {
+          setBusy(false,
+            result.savedCount + "件を保存しました。スプレッドシート: " +
+            result.spreadsheetName + "\n" + result.spreadsheetUrl
+          );
+        })
+        .withFailureHandler(error => {
+          setBusy(false, error.message || String(error));
+        })
+        .saveResults({
+          spreadsheetName: spreadsheetNameInput.value.trim(),
+          captureDate: selectedMetadata.captureDate,
+          latitude: selectedMetadata.latitude,
+          longitude: selectedMetadata.longitude,
+          items: recognizedItems
+        });
+    });
+
+    function renderItems(items) {
+      const rows = document.getElementById("resultRows");
+      rows.textContent = "";
+      items.forEach(item => {
+        const row = document.createElement("tr");
+        const nameCell = document.createElement("td");
+        const valueCell = document.createElement("td");
+        nameCell.textContent = item.name;
+        valueCell.textContent = String(item.value);
+        row.append(nameCell, valueCell);
+        rows.appendChild(row);
+      });
+      if (!items.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 2;
+        cell.textContent = "認識された項目はありません";
+        row.appendChild(cell);
+        rows.appendChild(row);
+      }
+    }
+
+    function setBusy(isBusy, message) {
+      recognizeButton.disabled = isBusy;
+      saveButton.disabled = isBusy;
+      imageInput.disabled = isBusy;
+      spreadsheetNameInput.disabled = isBusy;
+      statusElement.textContent = message;
+    }
+
+    function showError(error) {
+      statusElement.textContent = error && error.message
+        ? error.message
+        : String(error);
+    }
+
+    function displayMetadata(value) {
+      return value === "" || value === null || value === undefined
+        ? "EXIF情報なし"
+        : String(value);
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          if (typeof result !== "string" || !result.includes(",")) {
+            reject(new Error("画像を読み込めませんでした。"));
+            return;
+          }
+          resolve(result.slice(result.indexOf(",") + 1));
+        };
+        reader.onerror = () => reject(reader.error || new Error("画像を読み込めませんでした。"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function readImageMetadata(file) {
+      const buffer = await readFileBuffer(file);
+      const exif = findExif(buffer);
+      return {
+        captureDate: exif ? exif.captureDate : "",
+        latitude: exif ? exif.latitude : "",
+        longitude: exif ? exif.longitude : "",
+        hasExif: Boolean(exif)
+      };
+    }
+
+    function readFileBuffer(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error || new Error("画像情報を読み込めませんでした。"));
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    function findExif(buffer) {
+      const view = new DataView(buffer);
+      if (view.byteLength >= 4 && view.getUint16(0, false) === 0xffd8) {
+        let offset = 2;
+        while (offset + 4 <= view.byteLength) {
+          if (view.getUint8(offset) !== 0xff) break;
+          const marker = view.getUint8(offset + 1);
+          offset += 2;
+          if (marker === 0xda || marker === 0xd9) break;
+          const length = view.getUint16(offset, false);
+          if (length < 2 || offset + length > view.byteLength) break;
+          if (marker === 0xe1 && length >= 8 &&
+              view.getUint32(offset + 2, false) === 0x45786966 &&
+              view.getUint16(offset + 6, false) === 0) {
+            return parseTiff(view, offset + 8);
+          }
+          offset += length;
+        }
+      }
+
+      if (view.byteLength >= 8 &&
+          view.getUint32(0, false) === 0x89504e47) {
+        let offset = 8;
+        while (offset + 12 <= view.byteLength) {
+          const length = view.getUint32(offset, false);
+          if (length > view.byteLength - offset - 12) break;
+          const type = view.getUint32(offset + 4, false);
+          if (type === 0x65584966) {
+            return parseTiff(view, offset + 8);
+          }
+          offset += length + 12;
+        }
+      }
+
+      if (view.byteLength >= 8 &&
+          ((view.getUint8(0) === 0x49 && view.getUint8(1) === 0x49) ||
+           (view.getUint8(0) === 0x4d && view.getUint8(1) === 0x4d))) {
+        return parseTiff(view, 0);
+      }
+      return null;
+    }
+
+    function parseTiff(view, tiffStart) {
+      const littleEndian = view.getUint16(tiffStart, false) === 0x4949;
+      if (!littleEndian && view.getUint16(tiffStart, false) !== 0x4d4d) return null;
+      const get16 = offset => view.getUint16(offset, littleEndian);
+      const get32 = offset => view.getUint32(offset, littleEndian);
+      if (get16(tiffStart + 2) !== 42) return null;
+      const firstIfd = tiffStart + get32(tiffStart + 4);
+      const ifd = readIfd(view, tiffStart, firstIfd, get16, get32, littleEndian);
+      const exifPointer = ifd.values[0x8769];
+      const exifIfd = exifPointer === undefined
+        ? { values: {} }
+        : readIfd(view, tiffStart, tiffStart + exifPointer, get16, get32, littleEndian);
+      const gpsPointer = ifd.values[0x8825];
+      const gpsIfd = gpsPointer === undefined
+        ? { values: {} }
+        : readIfd(view, tiffStart, tiffStart + gpsPointer, get16, get32, littleEndian);
+
+      const captureDate = exifIfd.values[0x9003] || ifd.values[0x0132] || "";
+      const latitude = gpsCoordinate(gpsIfd.values[1], gpsIfd.values[2], "S");
+      const longitude = gpsCoordinate(gpsIfd.values[3], gpsIfd.values[4], "W");
+      return { captureDate, latitude, longitude };
+    }
+
+    function readIfd(view, tiffStart, ifdOffset, get16, get32, littleEndian) {
+      const values = {};
+      if (ifdOffset < tiffStart || ifdOffset + 2 > view.byteLength) {
+        return { values: values };
+      }
+      const count = get16(ifdOffset);
+      const typeSizes = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8 };
+      for (let i = 0; i < count; i++) {
+        const entry = ifdOffset + 2 + i * 12;
+        if (entry + 12 > view.byteLength) break;
+        const tag = get16(entry);
+        const type = get16(entry + 2);
+        const itemCount = get32(entry + 4);
+        const itemSize = typeSizes[type];
+        if (!itemSize || itemCount > 1000) continue;
+        const totalSize = itemSize * itemCount;
+        const dataOffset = totalSize <= 4 ? entry + 8 : tiffStart + get32(entry + 8);
+        if (dataOffset < tiffStart || dataOffset + totalSize > view.byteLength) continue;
+
+        if (type === 2) {
+          let text = "";
+          for (let j = 0; j < itemCount; j++) {
+            const code = view.getUint8(dataOffset + j);
+            if (code) text += String.fromCharCode(code);
+          }
+          values[tag] = text.trim();
+        } else if (type === 5 || type === 10) {
+          const rationals = [];
+          for (let j = 0; j < itemCount; j++) {
+            const numeratorOffset = dataOffset + j * 8;
+            const numerator = type === 5
+              ? get32(numeratorOffset)
+              : view.getInt32(numeratorOffset, littleEndian);
+            const denominator = type === 5
+              ? get32(numeratorOffset + 4)
+              : view.getInt32(numeratorOffset + 4, littleEndian);
+            rationals.push(denominator ? numerator / denominator : 0);
+          }
+          values[tag] = rationals;
+        } else {
+          const numbers = [];
+          for (let j = 0; j < itemCount; j++) {
+            const position = dataOffset + j * itemSize;
+            if (type === 3) numbers.push(view.getUint16(position, littleEndian));
+            else if (type === 4) numbers.push(get32(position));
+            else if (type === 9) numbers.push(view.getInt32(position, littleEndian));
+            else numbers.push(view.getUint8(position));
+          }
+          values[tag] = itemCount === 1 ? numbers[0] : numbers;
+        }
+      }
+      return { values: values };
+    }
+
+    function gpsCoordinate(reference, components, negativeReference) {
+      if (typeof reference !== "string" || !Array.isArray(components) ||
+          components.length < 3) return "";
+      const coordinate = components[0] + components[1] / 60 + components[2] / 3600;
+      return reference.toUpperCase() === negativeReference
+        ? -coordinate
+        : coordinate;
+    }
+  </script>
+</body>
+</html>

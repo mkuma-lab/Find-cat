@@ -25,17 +25,17 @@ function saveGeminiApiKey(apiKey) {
 
 function recognizeImage(request) {
   if (!request || typeof request.imageData !== "string" || !request.imageData) {
-    throw new Error("画像データがありません。");
+    throw new Error("[GEMINI_SEND_FAILED] 画像データがありません。");
   }
   if (typeof request.mimeType !== "string" ||
       !/^image\/(jpeg|png|webp|heic|heif)$/i.test(request.mimeType)) {
-    throw new Error("JPEG、PNG、WebP、HEIC/HEIF形式の画像を選択してください。");
+    throw new Error("[GEMINI_SEND_FAILED] JPEG、PNG、WebP、HEIC/HEIF形式の画像を選択してください。");
   }
 
   const apiKey = PropertiesService.getScriptProperties()
     .getProperty(GEMINI_API_KEY_PROPERTY);
   if (!apiKey) {
-    throw new Error("Gemini APIキーが未設定です。先にAPIキーを保存してください。");
+    throw new Error("[GEMINI_SEND_FAILED] Gemini APIキーが未設定です。先にAPIキーを保存してください。");
   }
 
   const prompt = [
@@ -46,39 +46,45 @@ function recognizeImage(request) {
     '次のJSONだけを返してください: {"items":[{"name":"項目名","value":"値または数値"}]}'
   ].join("\n");
 
-  const response = UrlFetchApp.fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/" +
-      GEMINI_MODEL + ":generateContent?key=" + encodeURIComponent(apiKey),
-    {
-      method: "post",
-      contentType: "application/json",
-      payload: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: request.mimeType, data: request.imageData } }
-          ]
-        }],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: "application/json"
-        }
-      }),
-      muteHttpExceptions: true
-    }
-  );
+  let response;
+  try {
+    response = UrlFetchApp.fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/" +
+        GEMINI_MODEL + ":generateContent?key=" + encodeURIComponent(apiKey),
+      {
+        method: "post",
+        contentType: "application/json",
+        payload: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: request.mimeType, data: request.imageData } }
+            ]
+          }],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json"
+          }
+        }),
+        muteHttpExceptions: true
+      }
+    );
+  } catch (error) {
+    throw new Error("[GEMINI_SEND_FAILED] Gemini APIへの送信に失敗しました: " + error.message);
+  }
 
   const statusCode = response.getResponseCode();
   const responseBody = response.getContentText();
   if (statusCode < 200 || statusCode >= 300) {
-    throw new Error("Gemini APIエラー (" + statusCode + "): " + responseBody);
+    throw new Error("[GEMINI_RESULT_FAILED] Gemini APIからエラー応答を受信しました (HTTP " +
+      statusCode + "): " + getGeminiErrorMessage(responseBody));
   }
 
   let apiResult;
   try {
     apiResult = JSON.parse(responseBody);
   } catch (error) {
-    throw new Error("Gemini APIの応答をJSONとして読み取れませんでした。");
+    throw new Error("[GEMINI_RESULT_FAILED] Gemini APIの応答をJSONとして読み取れませんでした。");
   }
 
   const text = apiResult.candidates &&
@@ -88,27 +94,44 @@ function recognizeImage(request) {
     apiResult.candidates[0].content.parts[0] &&
     apiResult.candidates[0].content.parts[0].text;
   if (typeof text !== "string") {
-    throw new Error("Gemini APIから認識結果が返されませんでした。");
+    throw new Error("[GEMINI_RESULT_FAILED] Gemini APIから認識結果が返されませんでした。");
   }
 
   let result;
   try {
     result = JSON.parse(text);
   } catch (error) {
-    throw new Error("Geminiの認識結果をJSONとして読み取れませんでした。");
+    throw new Error("[GEMINI_RESULT_FAILED] Geminiの認識結果をJSONとして読み取れませんでした。");
   }
   if (!result || !Array.isArray(result.items)) {
-    throw new Error("Geminiの認識結果に items 配列がありません。");
+    throw new Error("[GEMINI_RESULT_FAILED] Geminiの認識結果に items 配列がありません。");
   }
 
-  return result.items.map(function(item, index) {
-    if (!item || typeof item.name !== "string" || !item.name.trim() ||
-        (typeof item.value !== "string" && typeof item.value !== "number") ||
-        (typeof item.value === "number" && !Number.isFinite(item.value))) {
-      throw new Error((index + 1) + "件目の項目名または値が正しくありません。");
+  try {
+    const items = result.items.map(function(item, index) {
+      if (!item || typeof item.name !== "string" || !item.name.trim() ||
+          (typeof item.value !== "string" && typeof item.value !== "number") ||
+          (typeof item.value === "number" && !Number.isFinite(item.value))) {
+        throw new Error((index + 1) + "件目の項目名または値が正しくありません。");
+      }
+      return { name: item.name.trim(), value: item.value };
+    });
+    return { items: items };
+  } catch (error) {
+    throw new Error("[GEMINI_RESULT_FAILED] Geminiの認識結果を取得できませんでした: " + error.message);
+  }
+}
+
+function getGeminiErrorMessage(responseBody) {
+  try {
+    const result = JSON.parse(responseBody);
+    if (result.error && result.error.message) {
+      return result.error.message;
     }
-    return { name: item.name.trim(), value: item.value };
-  });
+  } catch (error) {
+    return "詳細なエラー情報を読み取れませんでした。";
+  }
+  return "詳細なエラー情報がありません。";
 }
 
 function saveResults(request) {
@@ -122,76 +145,121 @@ function saveResults(request) {
 
   const name = request.spreadsheetName.trim();
   const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-
+  let lockAcquired = false;
+  let spreadsheetAction = "";
   try {
-    const spreadsheet = findOrCreateSpreadsheet(name);
-    const sheet = spreadsheet.getSheets()[0];
-    if (sheet.getLastRow() === 0) {
-      sheet.getRange(1, 1, 1, SHEET_HEADERS.length).setValues([SHEET_HEADERS]);
-    }
+    lock.waitLock(30000);
+    lockAcquired = true;
 
-    const savedAt = Utilities.formatDate(
-      new Date(),
-      Session.getScriptTimeZone(),
-      "yyyy-MM-dd HH:mm:ss"
-    );
-    const latitude = validCoordinate(request.latitude, -90, 90);
-    const longitude = validCoordinate(request.longitude, -180, 180);
-    const captureDate = typeof request.captureDate === "string"
-      ? request.captureDate.slice(0, 50)
-      : "";
-    const items = request.items.map(function(item, index) {
-      if (!item || typeof item.name !== "string" || !item.name.trim() ||
-          (typeof item.value !== "string" && typeof item.value !== "number") ||
-          (typeof item.value === "number" && !Number.isFinite(item.value))) {
-        throw new Error((index + 1) + "件目の保存データが正しくありません。");
+    const spreadsheetResult = findOrCreateSpreadsheet(name);
+    const spreadsheet = spreadsheetResult.spreadsheet;
+    spreadsheetAction = spreadsheetResult.action;
+    let sheet;
+    try {
+      sheet = spreadsheet.getSheets()[0];
+      if (!sheet) {
+        throw new Error("スプレッドシートにシートがありません。");
       }
-      return [
-        savedAt,
-        captureDate,
-        latitude,
-        longitude,
-        safeSheetText(item.name.trim()),
-        typeof item.value === "string" ? safeSheetText(item.value) : item.value
-      ];
-    });
 
-    const rowsToSave = items.length
-      ? items
-      : [[savedAt, captureDate, latitude, longitude, "", ""]];
-    const firstRow = sheet.getLastRow() + 1;
-    sheet.getRange(firstRow, 1, rowsToSave.length, SHEET_HEADERS.length)
-      .setValues(rowsToSave);
-    SpreadsheetApp.flush();
+      if (sheet.getLastRow() === 0) {
+        sheet.getRange(1, 1, 1, SHEET_HEADERS.length).setValues([SHEET_HEADERS]);
+      }
 
-    return {
-      spreadsheetName: spreadsheet.getName(),
-      spreadsheetUrl: spreadsheet.getUrl(),
-      savedCount: items.length
-    };
+      const savedAt = Utilities.formatDate(
+        new Date(),
+        Session.getScriptTimeZone(),
+        "yyyy-MM-dd HH:mm:ss"
+      );
+      const latitude = validCoordinate(request.latitude, -90, 90);
+      const longitude = validCoordinate(request.longitude, -180, 180);
+      const captureDate = typeof request.captureDate === "string"
+        ? request.captureDate.slice(0, 50)
+        : "";
+      const items = request.items.map(function(item, index) {
+        if (!item || typeof item.name !== "string" || !item.name.trim() ||
+            (typeof item.value !== "string" && typeof item.value !== "number") ||
+            (typeof item.value === "number" && !Number.isFinite(item.value))) {
+          throw new Error((index + 1) + "件目の保存データが正しくありません。");
+        }
+        return [
+          savedAt,
+          captureDate,
+          latitude,
+          longitude,
+          safeSheetText(item.name.trim()),
+          typeof item.value === "string" ? safeSheetText(item.value) : item.value
+        ];
+      });
+
+      const rowsToSave = items.length
+        ? items
+        : [[savedAt, captureDate, latitude, longitude, "", ""]];
+      const firstRow = sheet.getLastRow() + 1;
+      sheet.getRange(firstRow, 1, rowsToSave.length, SHEET_HEADERS.length)
+        .setValues(rowsToSave);
+      SpreadsheetApp.flush();
+
+      return {
+        spreadsheetName: spreadsheet.getName(),
+        spreadsheetUrl: spreadsheet.getUrl(),
+        spreadsheetAction: spreadsheetAction,
+        savedCount: items.length
+      };
+    } catch (error) {
+      throw new Error("[SPREADSHEET_APPEND_FAILED:" + spreadsheetAction + "] " +
+        "スプレッドシートは" + (spreadsheetAction === "created" ? "新規作成" : "オープン") +
+        "できましたが、データの保存に失敗しました: " + error.message);
+    }
+  } catch (error) {
+    if (/^\[(SPREADSHEET_(SEARCH|OPEN|CREATE|APPEND|OPERATION)_FAILED)/.test(error.message)) {
+      throw error;
+    }
+    throw new Error("[SPREADSHEET_OPERATION_FAILED] " + error.message);
   } finally {
-    lock.releaseLock();
+    if (lockAcquired) {
+      lock.releaseLock();
+    }
   }
 }
 
 function findOrCreateSpreadsheet(name) {
-  const files = DriveApp.getFilesByName(name);
   const matches = [];
-  while (files.hasNext()) {
-    const file = files.next();
-    if (file.getMimeType() === MimeType.GOOGLE_SHEETS) {
-      matches.push(file);
+  try {
+    const files = DriveApp.getFilesByName(name);
+    while (files.hasNext()) {
+      const file = files.next();
+      if (file.getMimeType() === MimeType.GOOGLE_SHEETS) {
+        matches.push(file);
+      }
     }
+  } catch (error) {
+    throw new Error("[SPREADSHEET_SEARCH_FAILED] Google Drive内の検索に失敗しました: " +
+      error.message);
   }
 
   if (matches.length > 1) {
-    throw new Error("同じ名前のスプレッドシートが複数あります。ファイル名を一意にしてください。");
+    throw new Error("[SPREADSHEET_SEARCH_FAILED] 同じ名前のスプレッドシートが複数あります。ファイル名を一意にしてください。");
   }
   if (matches.length === 1) {
-    return SpreadsheetApp.openById(matches[0].getId());
+    try {
+      return {
+        spreadsheet: SpreadsheetApp.openById(matches[0].getId()),
+        action: "opened"
+      };
+    } catch (error) {
+      throw new Error("[SPREADSHEET_OPEN_FAILED] 既存スプレッドシートを開けませんでした: " +
+        error.message);
+    }
   }
-  return SpreadsheetApp.create(name);
+  try {
+    return {
+      spreadsheet: SpreadsheetApp.create(name),
+      action: "created"
+    };
+  } catch (error) {
+    throw new Error("[SPREADSHEET_CREATE_FAILED] 新規スプレッドシートを作成できませんでした: " +
+      error.message);
+  }
 }
 
 function validCoordinate(value, minimum, maximum) {

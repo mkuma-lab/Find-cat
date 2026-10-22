@@ -41,6 +41,10 @@
     th, td { padding: 8px; border: 1px solid #ccc; text-align: left; }
     th { background: #f3f5f7; }
     #resultSection[hidden] { display: none; }
+    .operation-result { margin-top: 6px; white-space: pre-line; }
+    .operation-result[data-state="success"] { color: #137333; }
+    .operation-result[data-state="failure"] { color: #b3261e; }
+    .operation-result[data-state="running"] { color: #555; }
   </style>
 </head>
 <body>
@@ -51,17 +55,22 @@
   <input id="apiKey" type="password" autocomplete="off" placeholder="初回のみ入力">
   <button id="saveKeyButton" type="button">APIキーを保存</button>
   <div id="keyStatus" class="note" aria-live="polite"></div>
+  <div id="apiKeySaveResult" class="operation-result" data-state="pending" role="status" aria-live="polite">APIキーの保存: 未実施</div>
   <p class="note">APIキーはこのApps Scriptのスクリプトプロパティに保存されます。</p>
 
   <label for="spreadsheetName">保存するスプレッドシート名</label>
   <input id="spreadsheetName" type="text" maxlength="200" autocomplete="off">
   <p class="note">Google Drive内で同名のファイルを探し、なければ新規作成します。</p>
+  <div id="spreadsheetActionResult" class="operation-result" data-state="pending" role="status" aria-live="polite">スプレッドシートの検索・オープン・作成: 未実施</div>
+  <div id="spreadsheetAppendResult" class="operation-result" data-state="pending" role="status" aria-live="polite">スプレッドシートへの保存: 未実施</div>
 
   <label for="imageInput">画像</label>
   <input id="imageInput" type="file" accept="image/*">
   <div id="metadata" aria-live="polite"></div>
 
   <button id="recognizeButton" type="button">画像を読み取る</button>
+  <div id="geminiSendResult" class="operation-result" data-state="pending" role="status" aria-live="polite">Gemini APIへのプロンプト送信: 未実施</div>
+  <div id="geminiReceiveResult" class="operation-result" data-state="pending" role="status" aria-live="polite">Gemini APIからの結果取得: 未実施</div>
   <div id="status" role="status" aria-live="polite"></div>
 
   <section id="resultSection" hidden>
@@ -100,7 +109,10 @@
           ? "Gemini APIキーは設定済みです。"
           : "Gemini APIキーを設定してください。";
       })
-      .withFailureHandler(showError)
+      .withFailureHandler(error => {
+        document.getElementById("keyStatus").textContent =
+          "APIキーの設定状態を確認できませんでした: " + getErrorMessage(error);
+      })
       .checkGeminiApiKey();
 
     document.getElementById("saveKeyButton").addEventListener("click", () => {
@@ -108,20 +120,31 @@
       if (!apiKey) {
         document.getElementById("keyStatus").textContent =
           "Gemini APIキーを入力してください。";
+        setOperationResult(
+          "apiKeySaveResult",
+          "APIキーの保存",
+          "failure",
+          "Gemini APIキーを入力してください。"
+        );
         return;
       }
 
       document.getElementById("saveKeyButton").disabled = true;
+      setOperationResult("apiKeySaveResult", "APIキーの保存", "running");
       google.script.run
         .withSuccessHandler(() => {
           document.getElementById("apiKey").value = "";
           document.getElementById("keyStatus").textContent =
             "Gemini APIキーを保存しました。";
+          setOperationResult("apiKeySaveResult", "APIキーの保存", "success");
           document.getElementById("saveKeyButton").disabled = false;
         })
         .withFailureHandler(error => {
           document.getElementById("saveKeyButton").disabled = false;
-          showError(error);
+          const message = getErrorMessage(error);
+          document.getElementById("keyStatus").textContent =
+            "Gemini APIキーを保存できませんでした。";
+          setOperationResult("apiKeySaveResult", "APIキーの保存", "failure", message);
         })
         .saveGeminiApiKey(apiKey);
     });
@@ -171,31 +194,60 @@
       }
       if (!spreadsheetNameInput.value.trim()) {
         statusElement.textContent = "保存するスプレッドシート名を入力してください。";
+        setOperationResult(
+          "spreadsheetActionResult",
+          "スプレッドシートの検索・オープン・作成",
+          "skipped",
+          "ファイル名が入力されていません。"
+        );
+        setOperationResult(
+          "spreadsheetAppendResult",
+          "スプレッドシートへの保存",
+          "skipped"
+        );
         return;
       }
 
       const file = selectedFile;
+      recognizedItems = null;
+      resultSection.hidden = true;
+      setOperationResult("geminiSendResult", "Gemini APIへのプロンプト送信", "running");
+      setOperationResult("geminiReceiveResult", "Gemini APIからの結果取得", "pending");
       setBusy(true, "画像をGeminiで解析しています...");
       try {
         const imageData = await fileToBase64(file);
         google.script.run
-          .withSuccessHandler(items => {
-            recognizedItems = items;
-            renderItems(items);
+          .withSuccessHandler(result => {
+            recognizedItems = result.items;
+            renderItems(result.items);
             resultSection.hidden = false;
-            setBusy(false, items.length
-              ? items.length + "件の項目を認識しました。内容を確認して保存してください。"
+            setOperationResult(
+              "geminiSendResult",
+              "Gemini APIへのプロンプト送信",
+              "success",
+              "Gemini APIから応答を受信しました。"
+            );
+            setOperationResult(
+              "geminiReceiveResult",
+              "Gemini APIからの結果取得",
+              "success",
+              result.items.length + "件の項目を取得しました。"
+            );
+            setBusy(false, result.items.length
+              ? result.items.length + "件の項目を認識しました。内容を確認して保存してください。"
               : "読み取れる項目はありませんでした。撮影情報のみ保存できます。");
           })
           .withFailureHandler(error => {
-            setBusy(false, error.message || String(error));
+            showGeminiFailure(error);
+            setBusy(false, removeErrorCode(getErrorMessage(error)));
           })
           .recognizeImage({
             imageData: imageData,
             mimeType: file.type || "image/jpeg"
           });
       } catch (error) {
-        setBusy(false, error.message || String(error));
+        showGeminiFailure(error);
+        setBusy(false, removeErrorCode(getErrorMessage(error)));
       }
     });
 
@@ -205,16 +257,42 @@
         return;
       }
 
+      setOperationResult(
+        "spreadsheetActionResult",
+        "スプレッドシートの検索・オープン・作成",
+        "running"
+      );
+      setOperationResult(
+        "spreadsheetAppendResult",
+        "スプレッドシートへの保存",
+        "running"
+      );
       setBusy(true, "スプレッドシートへ保存しています...");
       google.script.run
         .withSuccessHandler(result => {
+          const actionLabel = result.spreadsheetAction === "created"
+            ? "スプレッドシートの新規作成"
+            : "既存スプレッドシートのオープン";
+          setOperationResult(
+            "spreadsheetActionResult",
+            actionLabel,
+            "success",
+            result.spreadsheetName
+          );
+          setOperationResult(
+            "spreadsheetAppendResult",
+            "スプレッドシートへの保存",
+            "success",
+            result.savedCount + "件"
+          );
           setBusy(false,
             result.savedCount + "件を保存しました。スプレッドシート: " +
             result.spreadsheetName + "\n" + result.spreadsheetUrl
           );
         })
         .withFailureHandler(error => {
-          setBusy(false, error.message || String(error));
+          showSpreadsheetFailure(error);
+          setBusy(false, removeErrorCode(getErrorMessage(error)));
         })
         .saveResults({
           spreadsheetName: spreadsheetNameInput.value.trim(),
@@ -255,10 +333,102 @@
       statusElement.textContent = message;
     }
 
-    function showError(error) {
-      statusElement.textContent = error && error.message
-        ? error.message
-        : String(error);
+    function setOperationResult(elementId, label, state, detail) {
+      const element = document.getElementById(elementId);
+      const stateLabels = {
+        pending: "未実施",
+        skipped: "未実施",
+        running: "実行中",
+        success: "成功",
+        failure: "失敗"
+      };
+      element.dataset.state = state;
+      element.textContent = label + ": " + stateLabels[state] +
+        (detail ? " — " + detail : "");
+    }
+
+    function getErrorMessage(error) {
+      return error && error.message ? error.message : String(error);
+    }
+
+    function removeErrorCode(message) {
+      return message.replace(/^\[[A-Z_]+(?::[a-z]+)?\]\s*/, "");
+    }
+
+    function showGeminiFailure(error) {
+      const message = getErrorMessage(error);
+      if (message.indexOf("[GEMINI_RESULT_FAILED]") === 0) {
+        setOperationResult(
+          "geminiSendResult",
+          "Gemini APIへのプロンプト送信",
+          "success",
+          "Gemini APIから応答を受信しました。"
+        );
+        setOperationResult(
+          "geminiReceiveResult",
+          "Gemini APIからの結果取得",
+          "failure",
+          removeErrorCode(message)
+        );
+        return;
+      }
+
+      setOperationResult(
+        "geminiSendResult",
+        "Gemini APIへのプロンプト送信",
+        "failure",
+        removeErrorCode(message)
+      );
+      setOperationResult(
+        "geminiReceiveResult",
+        "Gemini APIからの結果取得",
+        "skipped",
+        "送信が完了していません。"
+      );
+    }
+
+    function showSpreadsheetFailure(error) {
+      const message = getErrorMessage(error);
+      const appendFailure = message.match(/^\[SPREADSHEET_APPEND_FAILED:(created|opened)\]/);
+      const actionFailure = message.match(/^\[SPREADSHEET_(SEARCH|OPEN|CREATE)_FAILED\]/);
+      if (appendFailure) {
+        const actionLabel = appendFailure[1] === "created"
+          ? "スプレッドシートの新規作成"
+          : "既存スプレッドシートのオープン";
+        setOperationResult(
+          "spreadsheetActionResult",
+          actionLabel,
+          "success"
+        );
+        setOperationResult(
+          "spreadsheetAppendResult",
+          "スプレッドシートへの保存",
+          "failure",
+          removeErrorCode(message)
+        );
+        return;
+      }
+
+      let actionLabel = "スプレッドシートの検索・オープン・作成";
+      if (actionFailure && actionFailure[1] === "SEARCH") {
+        actionLabel = "スプレッドシートの検索";
+      } else if (actionFailure && actionFailure[1] === "OPEN") {
+        actionLabel = "既存スプレッドシートのオープン";
+      } else if (actionFailure && actionFailure[1] === "CREATE") {
+        actionLabel = "スプレッドシートの新規作成";
+      }
+      setOperationResult(
+        "spreadsheetActionResult",
+        actionLabel,
+        "failure",
+        removeErrorCode(message)
+      );
+      setOperationResult(
+        "spreadsheetAppendResult",
+        "スプレッドシートへの保存",
+        "skipped",
+        "シートの準備が完了していません。"
+      );
     }
 
     function displayMetadata(value) {
